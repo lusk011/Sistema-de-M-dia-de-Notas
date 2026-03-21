@@ -33,7 +33,7 @@ for i in range(rep):
     aprovados = aprovados + 1
 
  elif 5<= media <7:
-    print(f'A média foi {media:.2f}, aluno fará recuperção.')
+    print(f'A média foi {media:.2f}, aluno fará recuperação.')
     recuperacao = recuperacao + 1
 
  else:
