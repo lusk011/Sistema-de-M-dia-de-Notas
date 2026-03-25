@@ -53,11 +53,10 @@ for i in range(rep):
 print('Alunos aprovados: ', aprovados)
 print('Alunos de recuperação: ', recuperacao)
 print('Alunos reprovados: ', reprovados)
-#Média de nota de cada avaliação
 print('Média da avaliação 1:', format(ava1 / rep, '.2f'))
 print('Média da avaliação 2:', format(ava2 / rep, '.2f'))
 print('Média da avaliação 3:', format(ava3 / rep, '.2f'))
 
   
-
+      
 
