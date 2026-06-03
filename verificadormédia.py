@@ -1,449 +1,391 @@
-import streamlit as st
-import pandas as pd
-from io import BytesIO
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.utils import get_column_letter
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email.mime.text import MIMEText
-from email import encoders
 from datetime import datetime
+from io import BytesIO
 
-# ── Page config ────────────────────────────────────────────────────────────────
+import pandas as pd
+import streamlit as st
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
+
+
 st.set_page_config(
-    page_title="Sistema de Avaliação",
-    page_icon="🎓",
+    page_title="Sistema de Avaliação Escolar",
+    page_icon="📚",
     layout="wide",
 )
 
-# ── Custom CSS ──────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-    .main { background-color: #f8f9fa; }
-    .stApp { font-family: Arial, sans-serif; }
-    .header-card {
-        background: linear-gradient(135deg, #1a237e 0%, #283593 100%);
-        padding: 2rem;
-        border-radius: 12px;
-        color: white;
-        text-align: center;
-        margin-bottom: 2rem;
-        box-shadow: 0 4px 15px rgba(26,35,126,0.3);
-    }
-    .metric-card {
-        background: white;
-        padding: 1.2rem;
-        border-radius: 10px;
-        text-align: center;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-        border-top: 4px solid;
-    }
-    .card-green { border-color: #2e7d32; }
-    .card-orange { border-color: #e65100; }
-    .card-red { border-color: #c62828; }
-    .status-aprovado { color: #2e7d32; font-weight: bold; }
-    .status-recuperacao { color: #e65100; font-weight: bold; }
-    .status-reprovado { color: #c62828; font-weight: bold; }
-    .student-row {
-        background: white;
-        padding: 0.8rem 1rem;
-        border-radius: 8px;
-        margin-bottom: 0.4rem;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.06);
-        display: flex;
-        align-items: center;
-    }
-    div[data-testid="stNumberInput"] input { font-size: 1rem; }
-    .section-title {
-        font-size: 1.1rem;
-        font-weight: 700;
-        color: #1a237e;
-        border-bottom: 2px solid #e3f2fd;
-        padding-bottom: 0.4rem;
-        margin-bottom: 1rem;
-    }
-</style>
-""", unsafe_allow_html=True)
 
-# ── Session state init ──────────────────────────────────────────────────────────
-if "alunos" not in st.session_state:
-    st.session_state.alunos = []
-if "sala" not in st.session_state:
-    st.session_state.sala = ""
-if "etapa" not in st.session_state:
-    st.session_state.etapa = "config"  # config | cadastro | resultado
-if "idx_atual" not in st.session_state:
-    st.session_state.idx_atual = 0
-if "total_alunos" not in st.session_state:
-    st.session_state.total_alunos = 0
+def iniciar_estado():
+    valores_iniciais = {
+        "etapa": "configuracao",
+        "sala": "",
+        "total_alunos": 1,
+        "alunos": [],
+        "indice_atual": 0,
+    }
 
-# ── Helper functions ────────────────────────────────────────────────────────────
-def get_situacao(media):
+    for chave, valor in valores_iniciais.items():
+        if chave not in st.session_state:
+            st.session_state[chave] = valor
+
+
+def calcular_situacao(media):
     if media >= 7:
         return "Aprovado"
-    elif media >= 5:
+    if media >= 5:
         return "Recuperação"
     return "Reprovado"
 
-def situacao_html(s):
-    cls = {
-        "Aprovado": "status-aprovado",
-        "Recuperação": "status-recuperacao",
-        "Reprovado": "status-reprovado",
-    }.get(s, "")
-    return f'<span class="{cls}">{s}</span>'
 
-def gerar_xlsx(sala, alunos):
+def calcular_observacao(situacao):
+    if situacao == "Aprovado":
+        return "Parabens!"
+    if situacao == "Recuperação":
+        return "Precisa fazer recuperação."
+    return "Média insuficiente."
+
+
+def montar_dataframe(alunos):
+    dados = []
+
+    for numero, aluno in enumerate(alunos, start=1):
+        dados.append(
+            {
+                "N": numero,
+                "Nome": aluno["nome"],
+                "Nota 1": aluno["nota1"],
+                "Nota 2": aluno["nota2"],
+                "Nota 3": aluno["nota3"],
+                "Média": aluno["media"],
+                "Situação": aluno["situacao"],
+                "Observação": calcular_observacao(aluno["situacao"]),
+            }
+        )
+
+    return pd.DataFrame(dados)
+
+
+def montar_dataframe_edicao(alunos):
+    dados = []
+
+    for numero, aluno in enumerate(alunos, start=1):
+        dados.append(
+            {
+                "N": numero,
+                "Nome": aluno["nome"],
+                "Nota 1": aluno["nota1"],
+                "Nota 2": aluno["nota2"],
+                "Nota 3": aluno["nota3"],
+            }
+        )
+
+    return pd.DataFrame(dados)
+
+
+def atualizar_alunos_por_dataframe(df):
+    alunos_corrigidos = []
+
+    for _, linha in df.iterrows():
+        nome = str(linha["Nome"]).strip()
+        nota1 = float(linha["Nota 1"])
+        nota2 = float(linha["Nota 2"])
+        nota3 = float(linha["Nota 3"])
+        media = round((nota1 + nota2 + nota3) / 3, 2)
+
+        alunos_corrigidos.append(
+            {
+                "nome": nome,
+                "nota1": nota1,
+                "nota2": nota2,
+                "nota3": nota3,
+                "media": media,
+                "situacao": calcular_situacao(media),
+            }
+        )
+
+    return alunos_corrigidos
+
+
+def gerar_planilha_excel(sala, alunos):
     wb = Workbook()
     ws = wb.active
     ws.title = "Resultado"
 
-    # Styles
-    azul_escuro = "1A237E"
-    azul_claro  = "E3F2FD"
-    verde       = "E8F5E9"
-    laranja     = "FFF3E0"
-    vermelho    = "FFEBEE"
-    cinza       = "F5F5F5"
+    azul = "1F4E78"
+    azul_claro = "DDEBF7"
+    verde = "E2F0D9"
+    amarelo = "FFF2CC"
+    vermelho = "FCE4D6"
+    cinza = "F2F2F2"
 
-    header_font    = Font(name="Arial", bold=True, color="FFFFFF", size=11)
-    subheader_font = Font(name="Arial", bold=True, color=azul_escuro, size=10)
-    cell_font      = Font(name="Arial", size=10)
-    center         = Alignment(horizontal="center", vertical="center")
-    left           = Alignment(horizontal="left", vertical="center")
-    thin_border    = Border(
-        left=Side(style="thin", color="BDBDBD"),
-        right=Side(style="thin", color="BDBDBD"),
-        top=Side(style="thin", color="BDBDBD"),
-        bottom=Side(style="thin", color="BDBDBD"),
+    borda = Border(
+        left=Side(style="thin", color="BFBFBF"),
+        right=Side(style="thin", color="BFBFBF"),
+        top=Side(style="thin", color="BFBFBF"),
+        bottom=Side(style="thin", color="BFBFBF"),
     )
+    centro = Alignment(horizontal="center", vertical="center")
+    esquerda = Alignment(horizontal="left", vertical="center")
 
-    # Title row
+    def formatar_intervalo(linha_inicio, coluna_inicio, linha_fim, coluna_fim, preenchimento, alinhamento):
+        for linha in range(linha_inicio, linha_fim + 1):
+            for coluna in range(coluna_inicio, coluna_fim + 1):
+                celula = ws.cell(row=linha, column=coluna)
+                celula.fill = PatternFill("solid", fgColor=preenchimento)
+                celula.border = borda
+                celula.alignment = alinhamento
+
     ws.merge_cells("A1:H1")
-    ws["A1"] = f"RELATÓRIO DE AVALIAÇÕES — Sala: {sala}"
-    ws["A1"].font = Font(name="Arial", bold=True, color="FFFFFF", size=13)
-    ws["A1"].fill = PatternFill("solid", fgColor=azul_escuro)
-    ws["A1"].alignment = center
-    ws.row_dimensions[1].height = 30
+    ws["A1"] = f"Relatório de Avaliações - Sala: {sala}"
+    ws["A1"].font = Font(bold=True, color="FFFFFF", size=14)
+    ws["A1"].fill = PatternFill("solid", fgColor=azul)
+    ws["A1"].alignment = centro
+    ws.row_dimensions[1].height = 28
 
     ws.merge_cells("A2:H2")
     ws["A2"] = f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
-    ws["A2"].font = Font(name="Arial", italic=True, color="757575", size=9)
-    ws["A2"].alignment = center
+    ws["A2"].font = Font(italic=True, color="666666")
     ws["A2"].fill = PatternFill("solid", fgColor=cinza)
-    ws.row_dimensions[2].height = 18
+    ws["A2"].alignment = centro
 
-    # Column headers
-    headers = ["#", "Nome do Aluno", "Nota 1", "Nota 2", "Nota 3", "Média", "Situação", "Observação"]
-    for col, h in enumerate(headers, 1):
-        cell = ws.cell(row=3, column=col, value=h)
-        cell.font = header_font
-        cell.fill = PatternFill("solid", fgColor="283593")
-        cell.alignment = center
-        cell.border = thin_border
-    ws.row_dimensions[3].height = 22
-
-    # Data rows
-    cor_situacao = {
-        "Aprovado":    verde,
-        "Recuperação": laranja,
-        "Reprovado":   vermelho,
-    }
-    for i, a in enumerate(alunos, 1):
-        row = i + 3
-        cor = cor_situacao.get(a["situacao"], "FFFFFF")
-        obs = (
-            "Parabéns!" if a["situacao"] == "Aprovado"
-            else "Atenção: recuperação necessária" if a["situacao"] == "Recuperação"
-            else "Reprovado por média insuficiente"
-        )
-        valores = [i, a["nome"], a["nota1"], a["nota2"], a["nota3"], "", a["situacao"], obs]
-        for col, val in enumerate(valores, 1):
-            cell = ws.cell(row=row, column=col, value=val)
-            cell.font = cell_font
-            cell.fill = PatternFill("solid", fgColor=cor)
-            cell.border = thin_border
-            cell.alignment = center if col != 2 else left
-        # Média com fórmula
-        media_cell = ws.cell(row=row, column=6)
-        media_cell.value = f"=AVERAGE(C{row}:E{row})"
-        media_cell.number_format = "0.00"
-        media_cell.font = Font(name="Arial", bold=True, size=10)
-        media_cell.fill = PatternFill("solid", fgColor=cor)
-        media_cell.border = thin_border
-        media_cell.alignment = center
-
-    # Summary block
-    n = len(alunos)
-    sr = n + 5  # start row for summary
-    ws.merge_cells(f"A{sr}:H{sr}")
-    ws[f"A{sr}"] = "RESUMO DA TURMA"
-    ws[f"A{sr}"].font = Font(name="Arial", bold=True, color="FFFFFF", size=11)
-    ws[f"A{sr}"].fill = PatternFill("solid", fgColor=azul_escuro)
-    ws[f"A{sr}"].alignment = center
-    ws.row_dimensions[sr].height = 24
-
-    summary = [
-        ("Total de Alunos",      n,         "FFFFFF"),
-        ("Aprovados",            sum(1 for a in alunos if a["situacao"] == "Aprovado"),    "C8E6C9"),
-        ("Em Recuperação",       sum(1 for a in alunos if a["situacao"] == "Recuperação"), "FFE0B2"),
-        ("Reprovados",           sum(1 for a in alunos if a["situacao"] == "Reprovado"),   "FFCDD2"),
-        ("Média da Turma (AVA1)",f"=AVERAGE(C4:C{3+n})",  azul_claro),
-        ("Média da Turma (AVA2)",f"=AVERAGE(D4:D{3+n})",  azul_claro),
-        ("Média da Turma (AVA3)",f"=AVERAGE(E4:E{3+n})",  azul_claro),
-        ("Média Geral",          f"=AVERAGE(F4:F{3+n})",  azul_claro),
+    cabecalhos = [
+        "N",
+        "Nome",
+        "Nota 1",
+        "Nota 2",
+        "Nota 3",
+        "Média",
+        "Situação",
+        "Observação",
     ]
-    for j, (label, val, cor) in enumerate(summary):
-        r = sr + 1 + j
-        lc = ws.cell(row=r, column=1, value=label)
-        lc.font = subheader_font
-        lc.fill = PatternFill("solid", fgColor=cinza)
-        lc.border = thin_border
-        lc.alignment = left
-        ws.merge_cells(f"A{r}:D{r}")
-        vc = ws.cell(row=r, column=5, value=val)
-        vc.font = Font(name="Arial", bold=True, size=10)
-        vc.fill = PatternFill("solid", fgColor=cor)
-        vc.border = thin_border
-        vc.alignment = center
-        vc.number_format = "0.00" if "Média" in label else "General"
-        ws.merge_cells(f"E{r}:H{r}")
-        ws.row_dimensions[r].height = 20
 
-    # Column widths
-    widths = [5, 30, 10, 10, 10, 10, 15, 35]
-    for col, w in enumerate(widths, 1):
-        ws.column_dimensions[get_column_letter(col)].width = w
+    for coluna, titulo in enumerate(cabecalhos, start=1):
+        celula = ws.cell(row=3, column=coluna, value=titulo)
+        celula.font = Font(bold=True, color="FFFFFF")
+        celula.fill = PatternFill("solid", fgColor=azul)
+        celula.alignment = centro
+        celula.border = borda
 
-    buf = BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return buf
+    cores_situacao = {
+        "Aprovado": verde,
+        "Recuperação": amarelo,
+        "Reprovado": vermelho,
+    }
 
-def enviar_email(destinatario, assunto, corpo, xlsx_bytes, nome_arquivo, smtp_user, smtp_pass):
-    msg = MIMEMultipart()
-    msg["From"]    = smtp_user
-    msg["To"]      = destinatario
-    msg["Subject"] = assunto
-    msg.attach(MIMEText(corpo, "plain", "utf-8"))
+    for linha, aluno in enumerate(alunos, start=4):
+        cor = cores_situacao.get(aluno["situacao"], "FFFFFF")
+        valores = [
+            linha - 3,
+            aluno["nome"],
+            aluno["nota1"],
+            aluno["nota2"],
+            aluno["nota3"],
+            aluno["media"],
+            aluno["situacao"],
+            calcular_observacao(aluno["situacao"]),
+        ]
 
-    part = MIMEBase("application", "octet-stream")
-    part.set_payload(xlsx_bytes.read())
-    encoders.encode_base64(part)
-    part.add_header("Content-Disposition", f'attachment; filename="{nome_arquivo}"')
-    msg.attach(part)
+        for coluna, valor in enumerate(valores, start=1):
+            celula = ws.cell(row=linha, column=coluna, value=valor)
+            celula.fill = PatternFill("solid", fgColor=cor)
+            celula.border = borda
+            celula.alignment = esquerda if coluna in [2, 8] else centro
 
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(smtp_user, smtp_pass)
-        server.sendmail(smtp_user, destinatario, msg.as_string())
+            if coluna in [3, 4, 5, 6]:
+                celula.number_format = "0.00"
 
-# ══════════════════════════════════════════════════════════════════════════════
-# HEADER
-# ══════════════════════════════════════════════════════════════════════════════
-st.markdown("""
-<div class="header-card">
-    <h1 style="margin:0;font-size:2rem;">🎓 Sistema de Avaliação Escolar</h1>
-    <p style="margin:0.4rem 0 0;opacity:0.85;">Cadastro de notas, relatório e envio ao professor</p>
-</div>
-""", unsafe_allow_html=True)
+    ultima_linha = len(alunos) + 3
+    resumo_linha = ultima_linha + 2
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ETAPA 1 — Configuração
-# ══════════════════════════════════════════════════════════════════════════════
-if st.session_state.etapa == "config":
-    st.markdown('<div class="section-title">⚙️ Configuração da Turma</div>', unsafe_allow_html=True)
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        sala = st.text_input("Nome / código da sala", placeholder="Ex: 3º Ano A")
-    with col2:
-        total = st.number_input("Quantidade de alunos", min_value=1, max_value=100, value=5, step=1)
+    ws.merge_cells(start_row=resumo_linha, start_column=1, end_row=resumo_linha, end_column=8)
+    ws.cell(row=resumo_linha, column=1, value="Resumo da Turma")
+    ws.cell(row=resumo_linha, column=1).font = Font(bold=True, color="FFFFFF")
+    formatar_intervalo(resumo_linha, 1, resumo_linha, 8, azul, centro)
 
-    if st.button("▶ Iniciar Cadastro", type="primary", use_container_width=True):
+    aprovados = sum(1 for aluno in alunos if aluno["situacao"] == "Aprovado")
+    recuperacao = sum(1 for aluno in alunos if aluno["situacao"] == "Recuperação")
+    reprovados = sum(1 for aluno in alunos if aluno["situacao"] == "Reprovado")
+
+    resumo = [
+        ("Total de alunos", len(alunos)),
+        ("Aprovados", aprovados),
+        ("Em recuperação", recuperacao),
+        ("Reprovados", reprovados),
+        ("Média geral da sala", f"=AVERAGE(F4:F{ultima_linha})"),
+    ]
+
+    for deslocamento, (rotulo, valor) in enumerate(resumo, start=1):
+        linha = resumo_linha + deslocamento
+        ws.merge_cells(start_row=linha, start_column=1, end_row=linha, end_column=4)
+        ws.merge_cells(start_row=linha, start_column=5, end_row=linha, end_column=8)
+
+        celula_rotulo = ws.cell(row=linha, column=1, value=rotulo)
+        celula_valor = ws.cell(row=linha, column=5, value=valor)
+
+        celula_rotulo.font = Font(bold=True)
+        formatar_intervalo(linha, 1, linha, 4, cinza, esquerda)
+        formatar_intervalo(linha, 5, linha, 8, azul_claro, centro)
+        celula_valor.number_format = "0.00" if rotulo == "Média geral" else "General"
+
+    larguras = [8, 32, 12, 12, 12, 12, 16, 28]
+    for coluna, largura in enumerate(larguras, start=1):
+        ws.column_dimensions[get_column_letter(coluna)].width = largura
+
+    arquivo = BytesIO()
+    wb.save(arquivo)
+    arquivo.seek(0)
+    return arquivo
+
+
+def reiniciar():
+    for chave in ["etapa", "sala", "total_alunos", "alunos", "indice_atual"]:
+        if chave in st.session_state:
+            del st.session_state[chave]
+    iniciar_estado()
+
+
+iniciar_estado()
+
+st.title("Sistema de Avaliação Escolar")
+st.caption("Cadastre alunos, registre notas e gere uma planilha Excel automaticamente.")
+
+
+if st.session_state.etapa == "configuracao":
+    st.subheader("Configuração da turma")
+
+    col_sala, col_total = st.columns([2, 1])
+    with col_sala:
+        sala = st.text_input("Nome ou código da sala", placeholder="Exemplo: 3º Ano A")
+    with col_total:
+        total_alunos = st.number_input(
+            "Quantidade de alunos",
+            min_value=1,
+            max_value=100,
+            value=5,
+            step=1,
+        )
+
+    if st.button("Iniciar cadastro", type="primary", use_container_width=True):
         if not sala.strip():
-            st.error("Informe o nome da sala.")
+            st.error("Informe o nome ou código da sala.")
         else:
-            st.session_state.sala        = sala.strip()
-            st.session_state.total_alunos = int(total)
-            st.session_state.alunos      = []
-            st.session_state.idx_atual   = 0
-            st.session_state.etapa       = "cadastro"
+            st.session_state.sala = sala.strip()
+            st.session_state.total_alunos = int(total_alunos)
+            st.session_state.alunos = []
+            st.session_state.indice_atual = 0
+            st.session_state.etapa = "cadastro"
             st.rerun()
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ETAPA 2 — Cadastro dos alunos
-# ══════════════════════════════════════════════════════════════════════════════
+
 elif st.session_state.etapa == "cadastro":
     total = st.session_state.total_alunos
-    idx   = st.session_state.idx_atual
+    indice = st.session_state.indice_atual
 
-    # Progress bar
-    progress = idx / total
-    st.progress(progress, text=f"Aluno {idx + 1} de {total}")
+    st.subheader(f"Aluno {indice + 1} de {total}")
+    st.progress(indice / total)
 
-    st.markdown(f'<div class="section-title">👤 Cadastro — Aluno {idx + 1}/{total}</div>', unsafe_allow_html=True)
-
-    with st.form(key=f"form_aluno_{idx}"):
+    with st.form(f"formulario_aluno_{indice}"):
         nome = st.text_input("Nome completo do aluno")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            n1 = st.number_input("Nota 1 (AVA1)", min_value=0.0, max_value=10.0, step=0.1, format="%.1f")
-        with c2:
-            n2 = st.number_input("Nota 2 (AVA2)", min_value=0.0, max_value=10.0, step=0.1, format="%.1f")
-        with c3:
-            n3 = st.number_input("Nota 3 (AVA3)", min_value=0.0, max_value=10.0, step=0.1, format="%.1f")
 
-        submitted = st.form_submit_button("➕ Salvar e próximo", type="primary", use_container_width=True)
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            nota1 = st.number_input("Nota 1", min_value=0.0, max_value=10.0, step=0.1)
+        with col2:
+            nota2 = st.number_input("Nota 2", min_value=0.0, max_value=10.0, step=0.1)
+        with col3:
+            nota3 = st.number_input("Nota 3", min_value=0.0, max_value=10.0, step=0.1)
 
-        if submitted:
-            if not nome.strip():
-                st.error("Informe o nome do aluno.")
-            else:
-                media    = (n1 + n2 + n3) / 3
-                situacao = get_situacao(media)
-                st.session_state.alunos.append({
-                    "nome": nome.strip(), "nota1": n1, "nota2": n2,
-                    "nota3": n3, "media": media, "situacao": situacao,
-                })
-                st.session_state.idx_atual += 1
-                if st.session_state.idx_atual >= total:
-                    st.session_state.etapa = "resultado"
-                st.rerun()
+        salvar = st.form_submit_button("Salvar aluno", type="primary", use_container_width=True)
 
-    # Alunos já cadastrados
-    if st.session_state.alunos:
-        st.markdown("---")
-        st.markdown('<div class="section-title">📋 Alunos cadastrados</div>', unsafe_allow_html=True)
-        for a in st.session_state.alunos:
-            st.markdown(
-                f"**{a['nome']}** &nbsp;|&nbsp; "
-                f"AVA1: {a['nota1']:.1f} · AVA2: {a['nota2']:.1f} · AVA3: {a['nota3']:.1f} &nbsp;|&nbsp; "
-                f"Média: **{a['media']:.2f}** &nbsp;|&nbsp; {situacao_html(a['situacao'])}",
-                unsafe_allow_html=True,
+    if salvar:
+        if not nome.strip():
+            st.error("Informe o nome do aluno.")
+        else:
+            media = round((nota1 + nota2 + nota3) / 3, 2)
+            st.session_state.alunos.append(
+                {
+                    "nome": nome.strip(),
+                    "nota1": nota1,
+                    "nota2": nota2,
+                    "nota3": nota3,
+                    "media": media,
+                    "situacao": calcular_situacao(media),
+                }
             )
 
-    if st.button("🔄 Recomeçar", use_container_width=True):
-        st.session_state.etapa = "config"
-        st.rerun()
+            st.session_state.indice_atual += 1
+            if st.session_state.indice_atual >= total:
+                st.session_state.etapa = "resultado"
+            st.rerun()
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ETAPA 3 — Resultado + Download + E-mail
-# ══════════════════════════════════════════════════════════════════════════════
+    if st.session_state.alunos:
+        st.divider()
+        st.subheader("Alunos já cadastrados")
+        st.dataframe(montar_dataframe(st.session_state.alunos), use_container_width=True)
+
+    st.button("Recomeçar", on_click=reiniciar, use_container_width=True)
+
+
 elif st.session_state.etapa == "resultado":
-    sala   = st.session_state.sala
+    sala = st.session_state.sala
     alunos = st.session_state.alunos
+    df = montar_dataframe(alunos)
 
-    # ── Summary metrics ──────────────────────────────────────────────────────
-    aprovados    = sum(1 for a in alunos if a["situacao"] == "Aprovado")
-    recuperacao  = sum(1 for a in alunos if a["situacao"] == "Recuperação")
-    reprovados   = sum(1 for a in alunos if a["situacao"] == "Reprovado")
-    media_geral  = sum(a["media"] for a in alunos) / len(alunos)
-    n            = len(alunos)
+    aprovados = int((df["Situação"] == "Aprovado").sum())
+    recuperacao = int((df["Situação"] == "Recuperação").sum())
+    reprovados = int((df["Situação"] == "Reprovado").sum())
+    media_geral = float(df["Média"].mean())
 
-    st.markdown(f'<div class="section-title">📊 Resultado Final — Sala: {sala}</div>', unsafe_allow_html=True)
+    st.subheader(f"Resultado final - {sala}")
 
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total de Alunos", n)
-    col2.metric("✅ Aprovados",    aprovados,   delta=f"{aprovados/n*100:.0f}%")
-    col3.metric("⚠️ Recuperação",  recuperacao, delta=f"{recuperacao/n*100:.0f}%")
-    col4.metric("❌ Reprovados",   reprovados,  delta=f"{reprovados/n*100:.0f}%")
+    col1.metric("Total", len(alunos))
+    col2.metric("Aprovados", aprovados)
+    col3.metric("Recuperação", recuperacao)
+    col4.metric("Reprovados", reprovados)
 
-    # Médias por avaliação
-    st.markdown("---")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Média AVA1", f"{sum(a['nota1'] for a in alunos)/n:.2f}")
-    c2.metric("Média AVA2", f"{sum(a['nota2'] for a in alunos)/n:.2f}")
-    c3.metric("Média AVA3", f"{sum(a['nota3'] for a in alunos)/n:.2f}")
-    c4.metric("Média Geral", f"{media_geral:.2f}")
+    st.metric("Média geral da turma", f"{media_geral:.2f}")
 
-    # ── Table ────────────────────────────────────────────────────────────────
-    st.markdown("---")
-    st.markdown('<div class="section-title">📋 Lista de Alunos</div>', unsafe_allow_html=True)
+    st.divider()
+    st.subheader("Corrigir dados antes de gerar a planilha")
+    st.caption("Edite nomes ou notas na tabela abaixo e clique em Salvar correções.")
 
-    df = pd.DataFrame(alunos)[["nome", "nota1", "nota2", "nota3", "media", "situacao"]]
-    df.columns = ["Nome", "AVA1", "AVA2", "AVA3", "Média", "Situação"]
-    df.index   = range(1, len(df) + 1)
-
-    def color_situacao(val):
-        colors = {
-            "Aprovado":    "background-color:#c8e6c9;color:#1b5e20;font-weight:bold",
-            "Recuperação": "background-color:#ffe0b2;color:#bf360c;font-weight:bold",
-            "Reprovado":   "background-color:#ffcdd2;color:#b71c1c;font-weight:bold",
-        }
-        return colors.get(val, "")
-
-    styled = (
-        df.style
-        .applymap(color_situacao, subset=["Situação"])
-        .format({"AVA1": "{:.1f}", "AVA2": "{:.1f}", "AVA3": "{:.1f}", "Média": "{:.2f}"})
-        .set_properties(**{"text-align": "center"})
-        .set_table_styles([{"selector": "th", "props": [("text-align", "center"), ("background-color", "#283593"), ("color", "white")]}])
+    df_edicao = montar_dataframe_edicao(alunos)
+    df_corrigido = st.data_editor(
+        df_edicao,
+        use_container_width=True,
+        hide_index=True,
+        disabled=["N"],
+        column_config={
+            "Nota 1": st.column_config.NumberColumn("Nota 1", min_value=0.0, max_value=10.0, step=0.1),
+            "Nota 2": st.column_config.NumberColumn("Nota 2", min_value=0.0, max_value=10.0, step=0.1),
+            "Nota 3": st.column_config.NumberColumn("Nota 3", min_value=0.0, max_value=10.0, step=0.1),
+        },
     )
-    st.dataframe(styled, use_container_width=True, height=min(400, 50 + 36 * n))
 
-    # ── Download ─────────────────────────────────────────────────────────────
-    st.markdown("---")
-    st.markdown('<div class="section-title">📥 Exportar Planilha</div>', unsafe_allow_html=True)
+    if st.button("Salvar correções", type="secondary", use_container_width=True):
+        if df_corrigido["Nome"].astype(str).str.strip().eq("").any():
+            st.error("Todos os alunos precisam ter nome.")
+        else:
+            st.session_state.alunos = atualizar_alunos_por_dataframe(df_corrigido)
+            st.success("Correções salvas. A planilha será gerada com os dados atualizados.")
+            st.rerun()
 
-    xlsx_buf   = gerar_xlsx(sala, alunos)
+    st.divider()
+    st.subheader("Tabela de resultados")
+    df = montar_dataframe(st.session_state.alunos)
+    st.dataframe(df, use_container_width=True)
+
+    arquivo_excel = gerar_planilha_excel(sala, st.session_state.alunos)
     nome_arquivo = f"avaliacao_{sala.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
 
     st.download_button(
-        label="⬇️ Baixar planilha Excel",
-        data=xlsx_buf,
+        "Gerar e baixar planilha Excel",
+        data=arquivo_excel,
         file_name=nome_arquivo,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary",
         use_container_width=True,
     )
 
-    # ── E-mail ───────────────────────────────────────────────────────────────
-    st.markdown("---")
-    st.markdown('<div class="section-title">📧 Enviar por E-mail ao Professor</div>', unsafe_allow_html=True)
-
-    with st.expander("🔧 Configurar e enviar e-mail", expanded=False):
-        st.info("ℹ️ Configure o Gmail do **remetente** com uma [Senha de App](https://myaccount.google.com/apppasswords) (não a senha normal). O 2FA precisa estar ativado.")
-
-        col_a, col_b = st.columns(2)
-        with col_a:
-            email_dest  = st.text_input("E-mail do professor (destinatário)")
-            email_rem   = st.text_input("Seu Gmail (remetente)")
-        with col_b:
-            senha_app   = st.text_input("Senha de App do Gmail", type="password")
-            assunto     = st.text_input("Assunto", value=f"Resultado Avaliações — Sala {sala}")
-
-        corpo = st.text_area(
-            "Mensagem",
-            value=(
-                f"Prezado(a) Professor(a),\n\n"
-                f"Segue em anexo a planilha com o resultado das avaliações da sala {sala}.\n\n"
-                f"Resumo:\n"
-                f"  • Aprovados: {aprovados}\n"
-                f"  • Em Recuperação: {recuperacao}\n"
-                f"  • Reprovados: {reprovados}\n"
-                f"  • Média Geral: {media_geral:.2f}\n\n"
-                f"Atenciosamente."
-            ),
-            height=180,
-        )
-
-        if st.button("📤 Enviar E-mail", type="primary", use_container_width=True):
-            if not all([email_dest, email_rem, senha_app]):
-                st.error("Preencha todos os campos de e-mail.")
-            else:
-                with st.spinner("Enviando..."):
-                    try:
-                        xlsx_buf2 = gerar_xlsx(sala, alunos)
-                        enviar_email(email_dest, assunto, corpo, xlsx_buf2, nome_arquivo, email_rem, senha_app)
-                        st.success(f"✅ E-mail enviado com sucesso para **{email_dest}**!")
-                    except smtplib.SMTPAuthenticationError:
-                        st.error("❌ Falha na autenticação. Verifique o Gmail e a Senha de App.")
-                    except Exception as e:
-                        st.error(f"❌ Erro ao enviar: {e}")
-
-    # ── Restart ──────────────────────────────────────────────────────────────
-    st.markdown("---")
-    if st.button("🔄 Nova Avaliação", use_container_width=True):
-        for key in ["alunos", "sala", "etapa", "idx_atual", "total_alunos"]:
-            del st.session_state[key]
-        st.rerun()
+    st.button("Nova avaliação", on_click=reiniciar, use_container_width=True)
