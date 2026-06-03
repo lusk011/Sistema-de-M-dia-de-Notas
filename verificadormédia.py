@@ -39,7 +39,7 @@ def calcular_situacao(media):
 
 def calcular_observacao(situacao):
     if situacao == "Aprovado":
-        return "Parabens!"
+        return "Parabéns!"
     if situacao == "Recuperação":
         return "Precisa fazer recuperação."
     return "Média insuficiente."
@@ -205,13 +205,14 @@ def gerar_planilha_excel(sala, alunos):
     aprovados = sum(1 for aluno in alunos if aluno["situacao"] == "Aprovado")
     recuperacao = sum(1 for aluno in alunos if aluno["situacao"] == "Recuperação")
     reprovados = sum(1 for aluno in alunos if aluno["situacao"] == "Reprovado")
+    media_geral_sala = round(sum(aluno["media"] for aluno in alunos) / len(alunos), 2)
 
     resumo = [
         ("Total de alunos", len(alunos)),
         ("Aprovados", aprovados),
         ("Em recuperação", recuperacao),
         ("Reprovados", reprovados),
-        ("Média geral da sala", f"=AVERAGE(F4:F{ultima_linha})"),
+        ("Média geral da sala", media_geral_sala),
     ]
 
     for deslocamento, (rotulo, valor) in enumerate(resumo, start=1):
@@ -225,7 +226,7 @@ def gerar_planilha_excel(sala, alunos):
         celula_rotulo.font = Font(bold=True)
         formatar_intervalo(linha, 1, linha, 4, cinza, esquerda)
         formatar_intervalo(linha, 5, linha, 8, azul_claro, centro)
-        celula_valor.number_format = "0.00" if rotulo == "Média geral" else "General"
+        celula_valor.number_format = "0.00" if rotulo == "Média geral da sala" else "General"
 
     larguras = [8, 32, 12, 12, 12, 12, 16, 28]
     for coluna, largura in enumerate(larguras, start=1):
